@@ -1,4 +1,4 @@
-package moneypenny
+package quartermaster
 
 type DockerHubBuild struct {
 	CallbackURL string `json:"callback_url"`
