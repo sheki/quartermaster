@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 type DeployAgent struct {
@@ -47,11 +49,11 @@ func (d *DeployAgent) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if build.PushData.Tag != "latest" {
-		log.Println("Non latest build, ignore")
+		glog.Infoln("Non latest build, ignore")
 		return
 	}
 
-	log.Println("got a request enqueue a build", build)
+	glog.Infoln("got a request enqueue a build", build)
 
 	select {
 	case d.incoming <- build:
@@ -72,7 +74,7 @@ func (d *DeployAgent) postMsg(msg, emoji string) {
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
-		log.Println("ERROR", err.Error())
+		glog.Errorln(err)
 		return
 	}
 	resp, err := http.PostForm(
@@ -80,7 +82,7 @@ func (d *DeployAgent) postMsg(msg, emoji string) {
 		url.Values{"payload": {string(b)}},
 	)
 	if err != nil {
-		log.Println("ERROR", err.Error())
+		glog.Error(err)
 	}
 	resp.Body.Close()
 }
@@ -88,7 +90,6 @@ func (d *DeployAgent) postMsg(msg, emoji string) {
 func (d *DeployAgent) promote() {
 	var workingSet []DockerHubBuild
 	for {
-		log.Println("start promote")
 		select {
 		case i := <-d.incoming:
 			workingSet = append(workingSet, i)
@@ -112,31 +113,39 @@ func (d *DeployAgent) processSingleBuild(build DockerHubBuild) {
 	defer func() {
 		d.outgoingReady <- struct{}{}
 	}()
-	log.Println("processing ", build)
+	glog.Infoln("processing ", build)
 
 	d.postMsg("Deploying "+build.Repository.RepoName, ":spock-hand:")
 
 	if err := os.Chdir(d.repoPath); err != nil {
-		log.Println("ERROR ", err.Error())
+		glog.Errorln(err)
 		return
 	}
 	if err := gitPull(); err != nil {
-		log.Println("ERROR", err.Error())
+		glog.Errorln(err)
 		return
 	}
-	log.Println("git pull success")
-	if err := ebDeploy(); err != nil {
-		log.Println("ERROR", err.Error())
+	msg, err := ebDeploy()
+	glog.Infoln(msg)
+	if err != nil {
+		d.postMsg(
+			fmt.Sprintf(
+				"Deploy probably failed for %s with message %s",
+				build.Repository.RepoName,
+				msg,
+			),
+			":sparkling_heart:",
+		)
+		glog.Errorln(err)
 		return
 	}
 	d.postMsg("Deploy success "+build.Repository.RepoName, ":sparkling_heart:")
 	log.Println("eb deploy done")
 }
 
-func ebDeploy() error {
-	msg, err := exec.Command("eb", "deploy").Output()
-	log.Println("EB DEPLOY OUTPUT", string(msg))
-	return err
+func ebDeploy() (string, error) {
+	b, err := exec.Command("eb", "deploy", "--timeout", "20").Output()
+	return string(b), err
 }
 
 func gitPull() error {
